@@ -23,7 +23,9 @@ cur = start0
 for b in beats:
     if b.get("fast"):
         if b["start"] > cur: segs.append((cur, b["start"], 1.0))
-        segs.append((b["start"], b["end"], (b["end"] - b["start"]) / FF)); cur = b["end"]
+        a = max(b["start"], cur)  # never before the first frame or the previous segment
+        if b["end"] > a: segs.append((a, b["end"], (b["end"] - a) / FF))
+        cur = max(cur, b["end"])
 if end0 > cur: segs.append((cur, end0, 1.0))
 def out_t(src):
     t = 0.0

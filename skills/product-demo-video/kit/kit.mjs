@@ -35,6 +35,7 @@ const BLUR_EMAILS_JS = `
     for (const el of document.querySelectorAll('input, textarea')) if (re.test(el.value || '')) blur(el); };
   addEventListener('DOMContentLoaded', () => { scan(); new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true }); });
   addEventListener('input', scan, true);
+  setInterval(scan, 500); // catches values set by scripts, which fire no events
 })();`;
 
 export async function startRecording({ name, viewport, scale = 2, css = "", profile = "./profile" }) {

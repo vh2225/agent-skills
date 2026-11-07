@@ -135,12 +135,14 @@ def reviewed_binaries():
 def scan(name, data, terms, binaries):
     """Return [(line, rule)] for one file's path and content."""
     findings = [(0, r) for r in deny_hits(name, terms) + generic_hits(name)]
-    if b"\x00" in data[:8000]:
+    if b"\x00" in data:
         if name not in binaries:
             findings.append((0, f"binary file (review it, then list its path in {BINARY_LIST})"))
         for enc in ("utf-16-le", "utf-16-be", "latin-1"):
-            text = data.decode(enc, errors="ignore")
+            text = data.decode(enc, errors="ignore").replace("\x00", "\n")
             findings += [(0, r) for r in deny_hits(text, terms) + secret_hits(text)]
+            for line in text.splitlines():
+                findings += [(0, r) for r in generic_hits(line.replace(ALLOW_MARK, ""))]
         return sorted(set(findings))
     text = data.decode("utf-8", errors="replace")
     for n, line in enumerate(text.splitlines(), 1):
@@ -164,8 +166,16 @@ def history_items():
             items.append((path, b""))  # tree: check the directory name only
             continue
         items.append((path, git("cat-file", "blob", sha)))
+    # every path that ever existed (rev-list names each object only once, so a renamed
+    # file with unchanged content would otherwise hide its old name)
+    paths = set()
+    for commit in git("rev-list", "--all").decode().split():
+        paths.update(git("ls-tree", "-r", "-t", "--name-only", "-z", commit).decode("utf-8", "replace").split("\0"))
+    items += [(p, b"") for p in sorted(paths) if p]
     log = git("log", "--all", "--format=commit %h%n%an <%ae>%n%cn <%ce>%n%B%n")
     items.append(("(commit metadata)", log))
+    refs = git("for-each-ref", "--format=%(refname)%0a%(taggername) %(taggeremail)%0a%(contents)")
+    items.append(("(refs and tags)", refs))
     return items
 
 
@@ -193,7 +203,13 @@ def main(argv):
         items = []
         for p in args:
             rel = os.path.relpath(p)
-            items.append((os.path.basename(p) if rel.startswith("..") else rel, open(p, "rb").read()))
+            name = os.path.basename(p) if rel.startswith("..") else rel
+            try:
+                with open(p, "rb") as f:
+                    items.append((name, f.read()))
+            except OSError as e:
+                print(f"leak-guard: cannot read {display(name, terms)}: {e.strerror}", file=sys.stderr)
+                return 2
 
     binaries = reviewed_binaries()
     findings = []

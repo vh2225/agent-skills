@@ -198,6 +198,51 @@ class Modes(unittest.TestCase):
             p = subprocess.run([sys.executable, GUARD, "--require-denylist", path], capture_output=True, text=True, env=env)
             self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
 
+    def test_history_catches_renamed_private_filename_and_tags(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@users.noreply.github.com"]
+            run("git", "init", "-q")
+            open(os.path.join(d, "zanzibar.md"), "w").write("same content\n")
+            run("git", "add", "-A"); run(*git, "commit", "-qm", "a")
+            run("git", "mv", "zanzibar.md", "clean.md"); run(*git, "commit", "-qm", "b")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "--history"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, "old filename: " + p.stdout + p.stderr)
+            self.assertNotIn("zanzibar", (p.stdout + p.stderr).lower())
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@users.noreply.github.com"]
+            run("git", "init", "-q"); open(os.path.join(d, "a.md"), "w").write("ok\n")
+            run("git", "add", "-A"); run(*git, "commit", "-qm", "a")
+            run(*git, "tag", "-a", "v1", "-m", "release for Zanzibar")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "--history"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, "tag message: " + p.stdout + p.stderr)
+
+    def test_late_nul_still_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "f.dat"), "wb").write(b"a" * 9000 + b"\x00")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "f.dat"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertIn("binary", p.stdout)
+
+    def test_reviewed_binary_still_gets_generic_rules(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "f.dat"), "wb").write(b"\x00 host 192.168.7.7 \x00")  # leak-guard: allow (test fixture)
+            open(os.path.join(d, ".leak-guard-binaries"), "w").write("f.dat\n")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "f.dat"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_unreadable_file_error_is_redacted(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "zanzibar-missing.md"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertNotEqual(p.returncode, 0)
+            self.assertNotIn("zanzibar", (p.stdout + p.stderr).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

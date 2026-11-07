@@ -63,6 +63,7 @@ grep -q "$T/alt/agent-memory/memory/MEMORY.md" "$T/alt/.codex/AGENTS.md" && ok "
 
 # an existing hand-written ~/.codex/AGENTS.md is backed up, never lost
 mkdir -p "$T/own/.codex" "$T/own/github"; git clone -q "$T/remote.git" "$T/own/github/agent-memory"
+(cd "$T/own/github/agent-memory" && git config user.name own && git config user.email own@t)
 echo "my own codex rules" > "$T/own/.codex/AGENTS.md"
 HOME="$T/own" AGENT_MEMORY_HOST=own "$SYNC" >/dev/null 2>&1
 ls "$T/own/.codex/" | grep -q '^AGENTS.md.pre-agent-memory\.' && grep -rq "my own codex rules" "$T/own/.codex/" && ok "existing AGENTS.md backed up" || bad "existing AGENTS.md backed up"
@@ -73,6 +74,12 @@ mkdir -p "$T/own/github/agent-memory/memory"; echo z > "$T/own/github/agent-memo
 HOME="$T/own" AGENT_MEMORY_HOST=own "$SYNC" >/dev/null 2>&1
 git -C "$T/own/github/agent-memory" log --all --name-only --format= | grep -q '^unrelated.txt$' && bad "only memory paths committed" || ok "only memory paths committed"
 git -C "$T/own/github/agent-memory" log --name-only --format= | grep -q '^memory/z.md$' && ok "memory change still committed" || bad "memory change still committed"
+
+# deleting a whole memory folder propagates
+mkdir -p "$T/own/github/agent-memory/rules"; git -C "$T/own/github/agent-memory" ls-files rules | grep -q . || bad "setup: rules tracked"
+rm -rf "$T/own/github/agent-memory/rules"
+HOME="$T/own" AGENT_MEMORY_HOST=own "$SYNC" >/dev/null 2>&1
+[ -z "$(git -C "$T/own/github/agent-memory" ls-tree -r --name-only HEAD rules)" ] && ok "deleted folder propagates" || bad "deleted folder propagates"
 
 # never fails the caller even when the remote is gone
 mv "$T/remote.git" "$T/gone.git"; HOME="$T/mac" "$SYNC" >/dev/null 2>&1 && ok "offline sync exits 0" || bad "offline sync exits 0"

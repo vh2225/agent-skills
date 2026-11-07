@@ -75,7 +75,7 @@ link_all(){
 commit_local(){
   local paths=() p
   for p in memory projects rules; do
-    [ -e "$REPO/$p" ] || continue
+    # no existence check: a deleted folder must still stage its deletions
     g add -A -- "$p" 2>/dev/null
     [ -n "$(g diff --cached --name-only -- "$p")" ] && paths+=("$p")
   done

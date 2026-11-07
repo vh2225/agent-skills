@@ -9,6 +9,9 @@ const { page } = r;
 page.setDefaultTimeout(6000); // one missing selector costs 6 s, not 30 s
 
 await page.goto(BASE, { waitUntil: "domcontentloaded" });
+// The persistent profile keeps app data between takes: start every take from a clean state.
+await page.evaluate(() => localStorage.clear());
+await page.reload({ waitUntil: "domcontentloaded" });
 const input = page.getByPlaceholder("What needs to be done?");
 await input.waitFor();
 await page.mouse.move(720, 400);

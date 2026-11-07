@@ -12,7 +12,14 @@ const ctx = await chromium.launchPersistentContext("./profile", {
   channel: "chrome", headless: false, viewport: { width: 1440, height: 900 },
 });
 const page = ctx.pages()[0] ?? await ctx.newPage();
-await page.goto(url);
+try {
+  await page.goto(url);
+} catch (e) {
+  // Playwright errors include the full URL; print only origin + path.
+  let u; try { u = new URL(url); } catch { u = null; }
+  console.error("Could not open", u ? u.origin + u.pathname : "the given URL", "-", String(e.message).split("\n")[0].replace(/https?:\/\/\S+/g, "<url>"));
+  await ctx.close(); process.exit(1);
+}
 console.log("Sign in in the Chrome window (waiting up to 10 min)...");
 
 const deadline = Date.now() + 10 * 60_000;
