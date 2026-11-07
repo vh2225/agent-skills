@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Blocks commits that would publish secrets, personal or organization data.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+python3 "$root/scripts/leak_guard.py" --require-denylist --staged
+if command -v gitleaks >/dev/null; then
+  gitleaks git --staged --no-banner --redact -c "$root/.gitleaks.toml" "$root"
+else
+  echo "pre-commit: gitleaks is not installed (brew install gitleaks); refusing to commit." >&2
+  exit 1
+fi

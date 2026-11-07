@@ -1,0 +1,12 @@
+# Never commit local data, recordings, browser profiles or env files.
+.env
+.env.*
+*.pem
+*.key
+profile/
+out/
+node_modules/
+*.mp4
+*.wav
+__pycache__/
+.DS_Store

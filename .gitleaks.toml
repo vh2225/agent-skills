@@ -1,0 +1,13 @@
+# gitleaks config: default rules plus a few extra shapes.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_-]{30,}'''
+
+[[rules]]
+id = "private-key-block"
+description = "Private key block"
+regex = '''-----BEGIN [A-Z ]*PRIVATE KEY-----'''

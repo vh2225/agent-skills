@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Last check before anything leaves the machine: every tracked file and the full history.
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+python3 scripts/leak_guard.py --require-denylist --all
+gitleaks git --no-banner --redact -c .gitleaks.toml .
+# Commit metadata is public too: authors must be GitHub noreply addresses.
+bad=$(git log --format='%ae%n%ce' | sort -u | grep -v '@users.noreply.github.com$' | grep -v '^noreply@anthropic.com$' || true)
+if [ -n "$bad" ]; then echo "pre-push: commits carry a non-noreply email; fix git config user.email and rewrite before pushing." >&2; exit 1; fi
+# Commit messages are scanned with the same rules.
+git log --format='%B' > "$(git rev-parse --git-dir)/leak-guard-msgs.txt"
+python3 scripts/leak_guard.py --require-denylist "$(git rev-parse --git-dir)/leak-guard-msgs.txt"

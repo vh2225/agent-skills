@@ -1,0 +1,7 @@
+[
+ {"id": "b1", "label": "The app", "say": "This is a simple to-do app. Everything starts in the box at the top."},
+ {"id": "b2", "label": "Add tasks", "say": "Type a task and press Enter. Each one lands in the list below."},
+ {"id": "b3", "label": "Finish a task", "say": "Tick the circle to mark a task as done."},
+ {"id": "b4", "label": "Filter the list", "say": "Use the filters to see only what is left, or only what is finished."},
+ {"id": "b5", "label": "Tidy up", "say": "Back on All, Clear completed removes everything you have finished."}
+]
