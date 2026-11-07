@@ -61,6 +61,19 @@ HOME="$T/alt" AGENT_MEMORY_HOST=alt AGENT_MEMORY_DIR="$T/alt/agent-memory" AGENT
 [ -f "$T/alt/agent-memory/projects/web/w.md" ] && ok "custom code dir: project memory folded in" || bad "custom code dir: project memory folded in"
 grep -q "$T/alt/agent-memory/memory/MEMORY.md" "$T/alt/.codex/AGENTS.md" && ok "codex path follows AGENT_MEMORY_DIR" || bad "codex path follows AGENT_MEMORY_DIR"
 
+# an existing hand-written ~/.codex/AGENTS.md is backed up, never lost
+mkdir -p "$T/own/.codex" "$T/own/github"; git clone -q "$T/remote.git" "$T/own/github/agent-memory"
+echo "my own codex rules" > "$T/own/.codex/AGENTS.md"
+HOME="$T/own" AGENT_MEMORY_HOST=own "$SYNC" >/dev/null 2>&1
+ls "$T/own/.codex/" | grep -q '^AGENTS.md.pre-agent-memory\.' && grep -rq "my own codex rules" "$T/own/.codex/" && ok "existing AGENTS.md backed up" || bad "existing AGENTS.md backed up"
+
+# only memory paths are committed, never other staged files
+echo private > "$T/own/github/agent-memory/unrelated.txt"; git -C "$T/own/github/agent-memory" add unrelated.txt
+mkdir -p "$T/own/github/agent-memory/memory"; echo z > "$T/own/github/agent-memory/memory/z.md"
+HOME="$T/own" AGENT_MEMORY_HOST=own "$SYNC" >/dev/null 2>&1
+git -C "$T/own/github/agent-memory" log --all --name-only --format= | grep -q '^unrelated.txt$' && bad "only memory paths committed" || ok "only memory paths committed"
+git -C "$T/own/github/agent-memory" log --name-only --format= | grep -q '^memory/z.md$' && ok "memory change still committed" || bad "memory change still committed"
+
 # never fails the caller even when the remote is gone
 mv "$T/remote.git" "$T/gone.git"; HOME="$T/mac" "$SYNC" >/dev/null 2>&1 && ok "offline sync exits 0" || bad "offline sync exits 0"
 exit $fail

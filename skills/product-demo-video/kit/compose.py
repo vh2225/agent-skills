@@ -15,7 +15,9 @@ def run(cmd): subprocess.run(cmd, check=True)
 
 # ---- 1. timeline: keep everything from first beat; compress fast segments to FF seconds
 FF = 3.0
-start0 = max(0, beats[0]["start"] - 0.3); end0 = beats[-1]["end"] + 0.4
+cap = json.load(open(f"{D}/capture.json")); off = cap["firstFrameAt"]
+# never start before the first captured frame (fast-loading pages begin the first beat earlier)
+start0 = max(off, beats[0]["start"] - 0.3); end0 = beats[-1]["end"] + 0.4
 segs = []  # (src_a, src_b, speed)
 cur = start0
 for b in beats:
@@ -33,12 +35,15 @@ body_len = out_t(end0)
 INTRO, OUTRO = 3.5, 4.5
 
 # ---- 2. phone/desktop footage, re-timed
-cap = json.load(open(f"{D}/capture.json")); off = cap["firstFrameAt"]
+# Early frames can arrive at a transient (even odd) size before the viewport settles;
+# scale every frame to the settled size of the last frame so the encoder gets one even size.
+last = sorted(f for f in os.listdir(f"{D}/frames-raw") if f.endswith(".jpg"))[-1]
+SW, SH = (v // 2 * 2 for v in Image.open(f"{D}/frames-raw/{last}").size)
 parts = []
 for i, (a, b, sp) in enumerate(segs):
     p = f"{D}/seg{i}.mp4"
     run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "concat", "-i", f"{D}/frames-raw/list.ffconcat",
-         "-vf", f"fps=30,trim={a-off:.3f}:{b-off:.3f},setpts=(PTS-STARTPTS)/{sp:.4f},fps=30,format=yuv420p",
+         "-vf", f"scale={SW}:{SH}:flags=lanczos,fps=30,trim={a-off:.3f}:{b-off:.3f},setpts=(PTS-STARTPTS)/{sp:.4f},fps=30,format=yuv420p",
          "-an", "-c:v", "libx264", "-crf", "16", p])
     parts.append(p)
 open(f"{D}/segs.txt", "w").write("".join(f"file '{os.path.basename(p)}'\n" for p in parts))

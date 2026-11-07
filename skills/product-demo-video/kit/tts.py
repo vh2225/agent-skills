@@ -1,6 +1,6 @@
 # Usage: $KOKORO_VENV/bin/python tts.py script.json outdir [voice]
 # script.json: [{"id": "...", "say": "..."}]; writes outdir/<id>.wav and outdir/durations.json
-import json, sys, os
+import json, sys, os, re
 if "ESPEAK_DATA_PATH" not in os.environ:
     import espeakng_loader; os.environ["ESPEAK_DATA_PATH"] = espeakng_loader.get_data_path()
 import numpy as np, soundfile as sf
@@ -11,6 +11,8 @@ pipe = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")
 durs = {}
 for b in beats:
     if not b.get("say"): continue
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(b.get("id", ""))):
+        sys.exit(f"bad beat id {b.get('id')!r}: use letters, digits, - or _")
     audio = np.concatenate([np.asarray(a) for _, _, a in pipe(b["say"], voice=voice, speed=1.0)])
     sf.write(f"{out}/{b['id']}.wav", audio, 24000)
     durs[b["id"]] = round(len(audio) / 24000, 3)

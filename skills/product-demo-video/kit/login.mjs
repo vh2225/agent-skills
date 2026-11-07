@@ -16,12 +16,15 @@ await page.goto(url);
 console.log("Sign in in the Chrome window (waiting up to 10 min)...");
 
 const deadline = Date.now() + 10 * 60_000;
+let ok = false;
 while (Date.now() < deadline) {
-  const ok = signal
+  ok = signal
     ? await page.locator(signal).first().isVisible().catch(() => false)
     : !/login|sign-?in|auth/i.test(page.url()); // fallback: left the sign-in pages
   if (ok) break;
   await page.waitForTimeout(3000);
 }
-console.log("Done. Session saved in ./profile. Current URL:", page.url());
+const where = new URL(page.url()); // print origin + path only: query strings can carry auth codes
 await ctx.close();
+if (!ok) { console.error("Timed out waiting for sign-in at", where.origin + where.pathname); process.exit(1); }
+console.log("Signed in. Session saved in ./profile (keep it private). Page:", where.origin + where.pathname);

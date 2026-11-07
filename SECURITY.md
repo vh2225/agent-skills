@@ -4,27 +4,29 @@ This repo is public and is assembled from private working setups, so every chang
 
 ## Layers
 
-1. **`scripts/leak_guard.py`** (run by the pre-commit and pre-push hooks and by CI):
-   - generic rules: real-looking email addresses, private and CGNAT IP addresses, tailnet hostnames, personal home paths, secret-shaped strings;
-   - a **private denylist** of names (people, organizations, products, places, hosts) kept outside the repo. Findings print only `denylist term #N`, never the term.
-   - file names and commit messages are checked too.
-2. **gitleaks** on staged changes (pre-commit) and the full history (pre-push, CI).
-3. **Commit metadata:** the pre-push hook and CI reject any commit whose author or committer email is not a GitHub noreply address.
+1. **`scripts/leak_guard.py`**:
+   - generic rules: real-looking email addresses, private, CGNAT and IPv6 private addresses, tailnet hostnames, personal home paths (macOS, Linux, Windows), secret-shaped strings;
+   - a **private denylist** of names (people, organizations, products, places, hosts) kept outside the repo. Matching ignores case, full-width forms and invisible characters. Findings print only `denylist term #N`, and a path containing a term is printed redacted;
+   - binary files are rejected unless reviewed and listed in `.leak-guard-binaries` (they are still searched for denylist terms and secret shapes);
+   - `--history` mode checks every blob, path, commit message and author/committer name in all local refs, so content that was added and later removed is still caught.
+2. **Hooks:** pre-commit runs the scanner on staged content plus gitleaks; pre-push runs `--history`, gitleaks over the full history, and rejects any commit email that is not a GitHub noreply address. Both refuse to pass without a non-empty private denylist.
+3. **CI** runs the tests, the generic rules over the full history, gitleaks and the noreply check. The private denylist is deliberately not stored in GitHub (not even as a secret), so CI cannot check private terms; the local hooks do.
 4. **GitHub:** secret scanning and push protection are enabled on the repository.
 
-A reviewed false positive can be marked with `leak-guard: allow` on the same line.
+A reviewed generic false positive can be marked with `leak-guard: allow` on the same line. Denylist matches cannot be silenced inline.
+
+Limits: the scanner reads text. It cannot see personal data inside images, audio or video, or in archives. Keep such files out of the repo.
 
 ## Setup after cloning
 
 ```
 brew install gitleaks            # or your platform's package
 git config core.hooksPath .githooks
-git config user.email <id>+<user>@users.noreply.github.com
+git config user.email "YOUR_ID+YOUR_USER@users.noreply.github.com"
 mkdir -p ~/.config/leak-guard && chmod 700 ~/.config/leak-guard
-$EDITOR ~/.config/leak-guard/denylist.txt   # one private term per line, chmod 600
+touch ~/.config/leak-guard/denylist.txt && chmod 600 ~/.config/leak-guard/denylist.txt
+# then add one private term per line to that file
 ```
-
-For CI, store the same list in a repository secret named `LEAK_GUARD_DENYLIST`.
 
 ## Reporting
 

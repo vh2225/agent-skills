@@ -2,38 +2,50 @@
 """leak-guard: block personal, organization and secret data from entering this public repo.
 
 Two layers:
-  1. Generic rules (in this file, public): real-looking emails, private/CGNAT IPs,
+  1. Generic rules (in this file, public): real-looking emails, private/CGNAT/ULA IPs,
      tailnet hostnames, personal home paths, and common secret shapes.
   2. A PRIVATE denylist of names you never want published (people, companies,
-     products, hostnames, addresses). It is read from LEAK_GUARD_DENYLIST (content)
+     products, hostnames, places). It is read from LEAK_GUARD_DENYLIST (content)
      or LEAK_GUARD_DENYLIST_FILE (default ~/.config/leak-guard/denylist.txt) and is
-     never stored in the repo. Matches print only "denylist term #N", never the term.
+     never stored in the repo. Findings never print a denylist term: matches show
+     "denylist term #N", and a path containing a term is shown redacted.
 
 Usage:
-  leak_guard.py [--require-denylist] FILE...   scan files
+  leak_guard.py [--require-denylist] FILE...   scan files (paths relative to the repo root)
   leak_guard.py [--require-denylist] --staged  scan the git index (pre-commit)
   leak_guard.py [--require-denylist] --all     scan every tracked file
+  leak_guard.py [--require-denylist] --history scan every blob, path, commit message and
+                                                author/committer name in all local refs
 
 Exit codes: 0 clean, 1 findings, 2 setup error.
-Silence a reviewed false positive with "leak-guard: allow" on the same line.
+
+A reviewed generic false positive can be silenced with "leak-guard: allow" on the same
+line. Denylist matches can never be silenced inline. Binary files are rejected unless
+their path is listed in .leak-guard-binaries (they are still searched for denylist terms
+and secret shapes).
 """
+import hashlib
 import os
 import re
 import subprocess
 import sys
+import unicodedata
 
 ALLOW_MARK = "leak-guard: allow"
+BINARY_LIST = ".leak-guard-binaries"
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}")
 EMAIL_OK = re.compile(
-    r"@((.+\.)?example\.(com|org|net)|users\.noreply\.github\.com|anthropic\.com|"
-    r"openai\.com|localhost)$|^git@github\.com$|^noreply@github\.com$",
+    r"(@((.+\.)?example\.(com|org|net)|users\.noreply\.github\.com|localhost)$)"
+    r"|^(noreply@anthropic\.com|noreply@openai\.com|noreply@github\.com|git@github\.com)$",
     re.I,
 )
 IPV4 = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])")
+IPV6_PRIVATE = re.compile(r"(?<![0-9A-Fa-f:])(f[cd][0-9a-f]{2}|fe80):[0-9a-f:]*", re.I)
 TAILNET = re.compile(r"\b[\w-]+\.ts\.net\b", re.I)
 HOME = re.compile(r"(/Users|/home)/([A-Za-z0-9._-]+)")
-HOME_OK = {"you", "user", "username", "me", "name", "node", "runner", "ubuntu", "<you>", "<user>"}
+WIN_HOME = re.compile(r"\b[A-Za-z]:\\+Users\\+([A-Za-z0-9._ -]+)", re.I)
+HOME_OK = {"you", "user", "username", "me", "name", "node", "runner", "ubuntu", "<you>", "<user>", "public", "default"}
 SECRETS = [
     re.compile(r"\bghp_[A-Za-z0-9]{30,}"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}"),
@@ -42,6 +54,12 @@ SECRETS = [
     re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 ]
+# zero-width and other invisible format characters used to split words
+INVISIBLE = re.compile("[­᠎​-‏‪-‮⁠-⁤﻿]")
+
+
+def normalize(s):
+    return INVISIBLE.sub("", unicodedata.normalize("NFKC", s)).casefold()
 
 
 def private_ip(m):
@@ -66,45 +84,67 @@ def load_denylist():
                 text = f.read()
         except OSError:
             return None
-    terms = [t.strip().lower() for t in text.splitlines()]
+    terms = [normalize(t.strip()) for t in text.splitlines()]
     return [t for t in terms if t and not t.startswith("#")]
 
 
-def check_line(line, terms):
+def deny_hits(text, terms):
+    low = normalize(text)
+    return [f"denylist term #{i}" for i, t in enumerate(terms or [], 1) if t in low]
+
+
+def generic_hits(line):
     if ALLOW_MARK in line:
         return []
     found = []
     for m in EMAIL.finditer(line):
         if not EMAIL_OK.search(m.group(0)):
             found.append("email")
-    for m in IPV4.finditer(line):
-        if private_ip(m):
-            found.append("private-ip")
+    if any(private_ip(m) for m in IPV4.finditer(line)) or IPV6_PRIVATE.search(line):
+        found.append("private-ip")
     if TAILNET.search(line):
         found.append("tailnet hostname")
-    for m in HOME.finditer(line):
-        if m.group(2).lower() not in HOME_OK:
-            found.append("home-path")
-    for rx in SECRETS:
-        if rx.search(line):
-            found.append("secret-shaped string")
-    low = line.lower()
-    for i, t in enumerate(terms or [], 1):
-        if t in low:
-            found.append(f"denylist term #{i}")
+    if any(m.group(2).lower() not in HOME_OK for m in HOME.finditer(line)):
+        found.append("home-path")
+    if any(m.group(1).strip().lower() not in HOME_OK for m in WIN_HOME.finditer(line)):
+        found.append("home-path")
+    if any(rx.search(line) for rx in SECRETS):
+        found.append("secret-shaped string")
     return found
 
 
-def scan(name, data, terms):
-    findings = []
-    for rule in check_line(os.path.basename(name), terms):
-        findings.append((name, 0, rule))
+def secret_hits(text):
+    return ["secret-shaped string"] if any(rx.search(text) for rx in SECRETS) else []
+
+
+def display(name, terms):
+    """A path safe to print: redacted if it contains a denylist term."""
+    if deny_hits(name, terms):
+        return "<path redacted:" + hashlib.sha256(name.encode()).hexdigest()[:8] + ">"
+    return name
+
+
+def reviewed_binaries():
+    try:
+        with open(BINARY_LIST, encoding="utf-8") as f:
+            return {l.strip() for l in f if l.strip() and not l.startswith("#")}
+    except OSError:
+        return set()
+
+
+def scan(name, data, terms, binaries):
+    """Return [(line, rule)] for one file's path and content."""
+    findings = [(0, r) for r in deny_hits(name, terms) + generic_hits(name)]
     if b"\x00" in data[:8000]:
-        return findings  # binary
+        if name not in binaries:
+            findings.append((0, f"binary file (review it, then list its path in {BINARY_LIST})"))
+        for enc in ("utf-16-le", "utf-16-be", "latin-1"):
+            text = data.decode(enc, errors="ignore")
+            findings += [(0, r) for r in deny_hits(text, terms) + secret_hits(text)]
+        return sorted(set(findings))
     text = data.decode("utf-8", errors="replace")
     for n, line in enumerate(text.splitlines(), 1):
-        for rule in check_line(line, terms):
-            findings.append((name, n, rule))
+        findings += [(n, r) for r in deny_hits(line, terms) + generic_hits(line)]
     return findings
 
 
@@ -112,34 +152,57 @@ def git(*args):
     return subprocess.run(["git", *args], capture_output=True, check=True).stdout
 
 
+def history_items():
+    """Every blob reachable from any local ref (with its path), plus commit metadata."""
+    items, seen = [], set()
+    for line in git("rev-list", "--all", "--objects").decode("utf-8", "replace").splitlines():
+        sha, _, path = line.partition(" ")
+        if not path or sha in seen:
+            continue
+        seen.add(sha)
+        if git("cat-file", "-t", sha).strip() != b"blob":
+            items.append((path, b""))  # tree: check the directory name only
+            continue
+        items.append((path, git("cat-file", "blob", sha)))
+    log = git("log", "--all", "--format=commit %h%n%an <%ae>%n%cn <%ce>%n%B%n")
+    items.append(("(commit metadata)", log))
+    return items
+
+
 def main(argv):
     require = "--require-denylist" in argv
     args = [a for a in argv if a != "--require-denylist"]
     terms = load_denylist()
-    if terms is None:
-        msg = "leak-guard: no private denylist found (set LEAK_GUARD_DENYLIST_FILE or create ~/.config/leak-guard/denylist.txt)"
+    if not terms:
+        msg = "leak-guard: no private denylist terms found (LEAK_GUARD_DENYLIST, LEAK_GUARD_DENYLIST_FILE or ~/.config/leak-guard/denylist.txt)"
         if require:
             print(msg + "; refusing to pass without it.", file=sys.stderr)
             return 2
         print(msg + "; running generic rules only.", file=sys.stderr)
+        terms = []
 
-    items = []
     if args[:1] == ["--staged"]:
         names = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").decode().split("\0")
         items = [(n, git("show", f":{n}")) for n in names if n]
     elif args[:1] == ["--all"]:
         names = git("ls-files", "-z").decode().split("\0")
         items = [(n, open(n, "rb").read()) for n in names if n and os.path.isfile(n)]
+    elif args[:1] == ["--history"]:
+        items = history_items()
     else:
-        items = [(p, open(p, "rb").read()) for p in args]
+        items = []
+        for p in args:
+            rel = os.path.relpath(p)
+            items.append((os.path.basename(p) if rel.startswith("..") else rel, open(p, "rb").read()))
 
+    binaries = reviewed_binaries()
     findings = []
     for name, data in items:
-        findings += scan(name, data, terms)
+        findings += [(display(name, terms), n, r) for n, r in scan(name, data, terms, binaries)]
     for name, n, rule in findings:
         print(f"{name}:{n}: {rule}")
     if findings:
-        print(f"leak-guard: {len(findings)} finding(s). Remove them, or mark a reviewed false positive with '{ALLOW_MARK}'.", file=sys.stderr)
+        print(f"leak-guard: {len(findings)} finding(s). Remove them, or mark a reviewed generic false positive with '{ALLOW_MARK}'.", file=sys.stderr)
         return 1
     return 0
 

@@ -4,7 +4,8 @@ One memory store for Claude Code and Codex, shared across your machines through 
 
 - Claude Code keeps per-folder memory in `~/.claude/projects/<encoded path>/memory/`. This tool folds each of those into your memory repo and replaces it with a symlink, so Claude reads and writes the repo without knowing.
 - Codex gets `~/.codex/AGENTS.md`, generated from `rules/shared.md` plus `rules/codex-memory.md`, which tells it to read and write the same memory files.
-- Each run commits local changes, `pull --rebase`s, pushes, and regenerates the Codex file. It is idempotent, takes a lock, and always exits 0, so it is safe in hooks and timers. `MEMORY.md` uses git's union merge, so two machines adding index lines never conflict. When two machines have different files with the same name, the local copy is kept as `<name>.from-<host>.md` and flagged in the index for you to reconcile.
+- Each run commits changes under `memory/`, `projects/` and `rules/` only, `pull --rebase`s, pushes, and regenerates the Codex file. It is idempotent, takes a lock (a lock older than 10 minutes is treated as stale), and always exits 0, so it is meant for hooks and timers. Network calls use non-interactive SSH with a 10-second connect timeout. `MEMORY.md` uses git's union merge, so index lines added on two machines merge without conflicts; other conflicting edits make the run abort its rebase and keep your local commits for you to resolve.
+- The first time it writes `~/.codex/AGENTS.md`, an existing hand-written file is backed up as `AGENTS.md.pre-agent-memory.<timestamp>`. Move anything you want to keep into `rules/shared.md`. When two machines have different files with the same name, the local copy is kept as `<name>.from-<host>.md` and flagged in the index for you to reconcile.
 
 ## Layout
 

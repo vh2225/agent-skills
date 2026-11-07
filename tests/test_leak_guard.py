@@ -65,6 +65,15 @@ class Generic(unittest.TestCase):
                   "-----BEGIN " + "OPENSSH PRIVATE KEY-----"]:  # leak-guard: allow (test fixture)
             self.assertFlags(f"token = {s}", "secret")
 
+    def test_vendor_domain_personal_email_flagged(self):
+        self.assertFlags("ask jane@anthropic.com", "email")  # leak-guard: allow (test fixture)
+
+    def test_ipv6_private_flagged(self):
+        self.assertFlags("listen on fd12:3456:789a::1", "private-ip")  # leak-guard: allow (test fixture)
+
+    def test_windows_home_path_flagged(self):
+        self.assertFlags(r"see C:\\Users\\jdoe\\notes.md", "home-path")  # leak-guard: allow (test fixture)
+
     def test_inline_allow(self):
         self.assertClean("ping 192.168.1.1  # leak-guard: allow (documented example)")
 
@@ -95,17 +104,79 @@ class Denylist(unittest.TestCase):
     def test_filename_checked_too(self):
         code, out = scan("clean body", denylist="bluebird\n", name="bluebird-notes.md")
         self.assertEqual(code, 1, out)
+        self.assertNotIn("bluebird", out.lower())
+
+    def test_allow_marker_does_not_silence_denylist(self):
+        code, out = scan("Bluebird  # leak-guard: allow", denylist="bluebird\n")
+        self.assertEqual(code, 1, out)
+
+    def test_unicode_tricks_caught(self):
+        for t in ["blue\u200bbird", "\uff42\uff4c\uff55\uff45\uff42\uff49\uff52\uff44", "BLUE\u2060BIRD"]:
+            code, out = scan(f"x {t} y", denylist="bluebird\n")
+            self.assertEqual(code, 1, f"{t!r}: {out}")
+
+    def test_empty_denylist_rejected_when_required(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "a.md"); open(path, "w").write("ok")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="# only a comment\n")
+            p = subprocess.run([sys.executable, GUARD, "--require-denylist", path], capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
 
 
 class Modes(unittest.TestCase):
-    def test_binary_files_skipped(self):
+    def test_binary_files_rejected_unless_reviewed(self):
         with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "img.png")
-            open(path, "wb").write(b"\x89PNG\x00\x00192.168.1.1")
-            env = dict(os.environ, LEAK_GUARD_DENYLIST_FILE=os.path.join(d, "missing"))
-            env.pop("LEAK_GUARD_DENYLIST", None)
-            p = subprocess.run([sys.executable, GUARD, path], capture_output=True, text=True, env=env)
+            open(os.path.join(d, "img.png"), "wb").write(b"\x89PNG\x00\x00data")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "img.png"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertIn("binary", p.stdout)
+            open(os.path.join(d, ".leak-guard-binaries"), "w").write("img.png\n")
+            p = subprocess.run([sys.executable, GUARD, "img.png"], cwd=d, capture_output=True, text=True, env=env)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_reviewed_binary_still_checked_for_terms(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "doc.bin"), "wb").write("\x00x zanzibar".encode("utf-16-le"))
+            open(os.path.join(d, ".leak-guard-binaries"), "w").write("doc.bin\n")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "doc.bin"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_directory_names_checked(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "zanzibar"))
+            open(os.path.join(d, "zanzibar", "notes.md"), "w").write("clean")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "zanzibar/notes.md"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertNotIn("zanzibar", p.stdout + p.stderr)
+
+    def test_history_mode_finds_removed_content_and_metadata(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q")
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@users.noreply.github.com"]
+            open(os.path.join(d, "x.md"), "w").write("about zanzibar\n")
+            run("git", "add", "x.md"); run(*git, "commit", "-qm", "one")
+            open(os.path.join(d, "x.md"), "w").write("clean\n")
+            run("git", "add", "x.md"); run(*git, "commit", "-qm", "two")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "--history"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, "removed content must be caught: " + p.stdout + p.stderr)
+            # clean history passes; a private term in a commit message or author name fails
+            d2 = os.path.join(d, "b"); os.makedirs(d2)
+            run2 = lambda *a: subprocess.run(a, cwd=d2, capture_output=True, text=True)
+            run2("git", "init", "-q"); open(os.path.join(d2, "y.md"), "w").write("ok\n"); run2("git", "add", "y.md")
+            run2(*git, "commit", "-qm", "fine")
+            p = subprocess.run([sys.executable, GUARD, "--history"], cwd=d2, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            run2(*git, "commit", "-q", "--allow-empty", "-m", "fix for Zanzibar")
+            p = subprocess.run([sys.executable, GUARD, "--history"], cwd=d2, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, "commit message: " + p.stdout + p.stderr)
+            run2("git", "-c", "user.name=Zanzibar Person", "-c", "user.email=t@users.noreply.github.com", "commit", "-q", "--allow-empty", "-m", "x")
+            p = subprocess.run([sys.executable, GUARD, "--history"], cwd=d2, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, "author name: " + p.stdout + p.stderr)
 
     def test_staged_mode_scans_index_content(self):
         with tempfile.TemporaryDirectory() as d:

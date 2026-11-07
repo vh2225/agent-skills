@@ -27,10 +27,14 @@ const CURSOR_JS = `
 const BLUR_EMAILS_JS = `
 (() => {
   const re = /[\\w.+-]+@[\\w-]+\\.[\\w.]+/;
+  // Best effort only: covers text nodes and form field values, not images, canvas or video.
+  // Record with sample data; never rely on blurring to hide real personal data.
+  const blur = (el) => { if (el && !el.dataset.blurred) { el.dataset.blurred = '1'; el.style.filter = 'blur(6px)'; } };
   const scan = () => { const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    for (let n; (n = w.nextNode());) if (re.test(n.nodeValue) && n.parentElement && !n.parentElement.dataset.blurred) {
-      n.parentElement.dataset.blurred = '1'; n.parentElement.style.filter = 'blur(6px)'; } };
+    for (let n; (n = w.nextNode());) if (re.test(n.nodeValue)) blur(n.parentElement);
+    for (const el of document.querySelectorAll('input, textarea')) if (re.test(el.value || '')) blur(el); };
   addEventListener('DOMContentLoaded', () => { scan(); new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true }); });
+  addEventListener('input', scan, true);
 })();`;
 
 export async function startRecording({ name, viewport, scale = 2, css = "", profile = "./profile" }) {
