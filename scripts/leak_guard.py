@@ -138,7 +138,7 @@ def scan(name, data, terms, binaries):
     if b"\x00" in data:
         if name not in binaries:
             findings.append((0, f"binary file (review it, then list its path in {BINARY_LIST})"))
-        for enc in ("utf-16-le", "utf-16-be", "latin-1"):
+        for enc in ("utf-8", "utf-16-le", "utf-16-be", "latin-1"):
             text = data.decode(enc, errors="ignore").replace("\x00", "\n")
             findings += [(0, r) for r in deny_hits(text, terms) + secret_hits(text)]
             for line in text.splitlines():
@@ -196,7 +196,16 @@ def main(argv):
         items = [(n, git("show", f":{n}")) for n in names if n]
     elif args[:1] == ["--all"]:
         names = git("ls-files", "-z").decode().split("\0")
-        items = [(n, open(n, "rb").read()) for n in names if n and os.path.isfile(n)]
+        items = []
+        for n in names:
+            if not (n and os.path.isfile(n)):
+                continue
+            try:
+                with open(n, "rb") as f:
+                    items.append((n, f.read()))
+            except OSError as e:
+                print(f"leak-guard: cannot read {display(n, terms)}: {e.strerror}", file=sys.stderr)
+                return 2
     elif args[:1] == ["--history"]:
         items = history_items()
     else:
@@ -224,4 +233,9 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except subprocess.CalledProcessError:
+        # never print the failing command: its arguments can contain private paths
+        print("leak-guard: a git command failed; run inside a git repository and retry.", file=sys.stderr)
+        sys.exit(2)

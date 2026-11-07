@@ -242,6 +242,27 @@ class Modes(unittest.TestCase):
             p = subprocess.run([sys.executable, GUARD, "zanzibar-missing.md"], cwd=d, capture_output=True, text=True, env=env)
             self.assertNotEqual(p.returncode, 0)
             self.assertNotIn("zanzibar", (p.stdout + p.stderr).lower())
+    def test_reviewed_binary_utf8_unicode_term_caught(self):
+        with tempfile.TemporaryDirectory() as d:
+            fw = "".join(chr(0xFF41 + ord(c) - ord("a")) for c in "zanzibar")
+            open(os.path.join(d, "f.dat"), "wb").write(b"\x00 " + fw.encode("utf-8"))
+            open(os.path.join(d, ".leak-guard-binaries"), "w").write("f.dat\n")
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "f.dat"], cwd=d, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_all_mode_unreadable_file_redacted(self):
+        if os.geteuid() == 0:
+            self.skipTest("root can read anything")
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q"); f = os.path.join(d, "zanzibar.md"); open(f, "w").write("x\n")
+            run("git", "add", "-A"); os.chmod(f, 0)
+            env = dict(os.environ, LEAK_GUARD_DENYLIST="zanzibar\n")
+            p = subprocess.run([sys.executable, GUARD, "--all"], cwd=d, capture_output=True, text=True, env=env)
+            os.chmod(f, 0o600)
+            self.assertNotEqual(p.returncode, 0)
+            self.assertNotIn("zanzibar", (p.stdout + p.stderr).lower())
 
 
 if __name__ == "__main__":
